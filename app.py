@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import os
 import re
 import requests
+import traceback
 
 app = Flask(__name__)
 
@@ -24,11 +25,11 @@ HEADERS = {
 def normalize_phone(phone):
     """Clean messy phone numbers and format as +1XXXXXXXXXX for US numbers."""
     if not phone:
-        return None
+        return ""
     phone = re.sub(r"(ext\.?|x|extension)\s*\d*", "", phone, flags=re.IGNORECASE)
     digits = re.sub(r"\D", "", phone)
     if not digits:
-        return None
+        return ""
     if len(digits) == 10:
         digits = "1" + digits
     elif len(digits) > 11 and digits.startswith("00"):
@@ -39,7 +40,7 @@ def normalize_phone(phone):
 def normalize_name(name):
     """Clean up extra spaces and standardize capitalization for names."""
     if not name:
-        return None
+        return ""
     name = re.sub(r"\s+", " ", name.strip())
     parts = []
     for word in name.split(" "):
@@ -50,12 +51,12 @@ def normalize_name(name):
 
 def split_name(full_name):
     """Split a full name into first + last (everything after first space = last)."""
-    if not full_name:
-        return None, None
+    if not full_name or not full_name.strip():
+        return "", ""
     full_name = full_name.strip()
     first_space = full_name.find(" ")
     if first_space == -1:
-        return full_name, None
+        return full_name, ""
     first = full_name[:first_space]
     last = full_name[first_space + 1:].strip()
     return first, last
@@ -67,43 +68,60 @@ def split_name(full_name):
 @app.route("/hubspot-cleaner", methods=["POST"])
 def hubspot_cleaner():
     """Receive Google Form data (via Apps Script), clean it, and send to HubSpot."""
-    data = request.get_json(force=True)
-    print("📬 Received submission:", data)
+    try:
+        data = request.get_json(force=True)
+        print("📬 Received submission:", data)
 
-    # Extract raw fields
-    name_raw = data.get("name")
-    email = data.get("email")
-    phone = data.get("phone")
+        # Extract raw fields
+        name_raw = data.get("name")
+        email = data.get("email")
+        phone = data.get("phone")
 
-    # Clean and process
-    firstname_raw, lastname_raw = split_name(name_raw)
-    firstname = normalize_name(firstname_raw)
-    lastname = normalize_name(lastname_raw)
-    phone = normalize_phone(phone)
+        # Clean and process
+        firstname_raw, lastname_raw = split_name(name_raw)
+        firstname = normalize_name(firstname_raw)
+        lastname = normalize_name(lastname_raw)
+        phone = normalize_phone(phone)
 
-    if not email:
-        print("⚠️ No email found in submission; skipping.")
-        return jsonify({"error": "Missing email"}), 400
+        print(f"🧩 Split name → first: '{firstname}', last: '{lastname}'")
+        print(f"📞 Cleaned phone: {phone}")
 
-    payload = {
-        "properties": {
-            "firstname": firstname,
-            "lastname": lastname,
-            "email": email,
-            "phone": phone
+        # Validate email
+        if not email:
+            print("⚠️ No email found in submission; skipping.")
+            return jsonify({"error": "Missing email"}), 400
+
+        # Prepare HubSpot payload
+        payload = {
+            "properties": {
+                "firstname": firstname or "",
+                "lastname": lastname or "",
+                "email": email or "",
+                "phone": phone or ""
+            }
         }
-    }
 
-    # Send to HubSpot
-    resp = requests.post(f"{HUBSPOT_URL}/crm/v3/objects/contacts",
-                         headers=HEADERS, json=payload)
+        print("📦 Sending payload to HubSpot:", payload)
 
-    if resp.status_code in (200, 201):
-        print(f"✅ Contact created/updated successfully for {email}")
-        return jsonify({"message": "OK"}), 200
-    else:
-        print(f"❌ HubSpot error {resp.status_code}: {resp.text}")
-        return jsonify({"error": "HubSpot error", "details": resp.text}), 500
+        # Send to HubSpot
+        resp = requests.post(
+            f"{HUBSPOT_URL}/crm/v3/objects/contacts",
+            headers=HEADERS,
+            json=payload
+        )
+
+        # Handle HubSpot response
+        if resp.status_code in (200, 201):
+            print(f"✅ Contact created/updated successfully for {email}")
+            return jsonify({"message": "OK"}), 200
+        else:
+            print(f"❌ HubSpot error {resp.status_code}: {resp.text}")
+            return jsonify({"error": "HubSpot error", "details": resp.text}), 500
+
+    except Exception as e:
+        print("🚨 SERVER ERROR:", str(e))
+        traceback.print_exc()
+        return jsonify({"error": "Server crashed", "details": str(e)}), 500
 
 
 # -------------------------------------------------------------------
