@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import os
 import re
 import requests
@@ -8,7 +8,6 @@ app = Flask(__name__)
 # -------------------------------------------------------------------
 # CONFIGURATION
 # -------------------------------------------------------------------
-# Read your HubSpot Private App token from Render's environment variable
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN")
 if not ACCESS_TOKEN:
     raise RuntimeError("⚠️ ACCESS_TOKEN environment variable not set!")
@@ -18,7 +17,6 @@ HEADERS = {
     "Authorization": f"Bearer {ACCESS_TOKEN}",
     "Content-Type": "application/json"
 }
-
 
 # -------------------------------------------------------------------
 # HELPER FUNCTIONS
@@ -50,6 +48,19 @@ def normalize_name(name):
     return " ".join(parts)
 
 
+def split_name(full_name):
+    """Split a full name into first + last (everything after first space = last)."""
+    if not full_name:
+        return None, None
+    full_name = full_name.strip()
+    first_space = full_name.find(" ")
+    if first_space == -1:
+        return full_name, None
+    first = full_name[:first_space]
+    last = full_name[first_space + 1:].strip()
+    return first, last
+
+
 # -------------------------------------------------------------------
 # WEBHOOK ENDPOINT
 # -------------------------------------------------------------------
@@ -59,14 +70,20 @@ def hubspot_cleaner():
     data = request.get_json(force=True)
     print("📬 Received submission:", data)
 
-    firstname = normalize_name(data.get("firstname"))
-    lastname = normalize_name(data.get("lastname"))
+    # Extract raw fields
+    name_raw = data.get("name")
     email = data.get("email")
-    phone = normalize_phone(data.get("phone"))
+    phone = data.get("phone")
+
+    # Clean and process
+    firstname_raw, lastname_raw = split_name(name_raw)
+    firstname = normalize_name(firstname_raw)
+    lastname = normalize_name(lastname_raw)
+    phone = normalize_phone(phone)
 
     if not email:
         print("⚠️ No email found in submission; skipping.")
-        return "Missing email", 400
+        return jsonify({"error": "Missing email"}), 400
 
     payload = {
         "properties": {
@@ -77,16 +94,16 @@ def hubspot_cleaner():
         }
     }
 
-    # Send to HubSpot: create or update contact
+    # Send to HubSpot
     resp = requests.post(f"{HUBSPOT_URL}/crm/v3/objects/contacts",
                          headers=HEADERS, json=payload)
 
     if resp.status_code in (200, 201):
         print(f"✅ Contact created/updated successfully for {email}")
-        return "OK", 200
+        return jsonify({"message": "OK"}), 200
     else:
         print(f"❌ HubSpot error {resp.status_code}: {resp.text}")
-        return "Error", 500
+        return jsonify({"error": "HubSpot error", "details": resp.text}), 500
 
 
 # -------------------------------------------------------------------
