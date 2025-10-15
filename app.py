@@ -65,6 +65,11 @@ def split_name(full_name):
 # -------------------------------------------------------------------
 # WEBHOOK ENDPOINT
 # -------------------------------------------------------------------
+@app.route("/", methods=["GET"])
+def home():
+    print("👋 Someone visited the home page!")
+    return "<h1>Hello</h1>", 200
+
 @app.route("/hubspot-cleaner", methods=["POST"])
 def hubspot_cleaner():
     """Receive Google Form data (via Apps Script), clean it, and send to HubSpot."""
